@@ -1,0 +1,12 @@
+flask
+flask-cors
+pymongo
+bcrypt
+pyjwt
+python-dotenv
+langchain
+langchain-google-genai
+langchain-community
+chromadb
+PyPDF2
+tiktoken
