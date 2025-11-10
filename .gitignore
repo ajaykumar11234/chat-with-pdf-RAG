@@ -1,0 +1,21 @@
+# Node dependencies
+node_modules/
+
+# Backend environment files
+backend/.env
+backend/.env.local
+
+# Frontend environment files
+frontend/.env
+frontend/.env.local
+
+# Build outputs
+backend/__pycache__/
+frontend/build/
+
+# Python cache
+*.pyc
+__pycache__/
+
+# Vector store data
+backend/vectorstores/

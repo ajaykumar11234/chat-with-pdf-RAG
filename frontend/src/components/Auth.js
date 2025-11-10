@@ -4,8 +4,10 @@ const Auth = ({ onLogin }) => {
   const [isSignup, setIsSignup] = useState(false);
   const [form, setForm] = useState({ username: '', password: '', role: 'user' });
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const backendUrl = 'http://localhost:5001/api';
+ const backendUrl = process.env.REACT_APP_BACKEND_URL;
+
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -13,6 +15,9 @@ const Auth = ({ onLogin }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsLoading(true);
+    setError('');
+    
     const endpoint = isSignup ? '/signup' : '/login';
     try {
       const res = await fetch(`${backendUrl}${endpoint}`, {
@@ -22,189 +27,97 @@ const Auth = ({ onLogin }) => {
       });
       const data = await res.json();
       if (res.ok) {
-        // Note: localStorage not available in Claude.ai environment
-        // In your actual app, uncomment the line below:
-        // localStorage.setItem('token', data.token);
-        onLogin(data.token, data.role); // Notify App to switch dashboard
+        onLogin(data.token, data.role);
       } else {
         setError(data.error || 'Something went wrong');
       }
     } catch (err) {
       console.error(err);
       setError('Network error');
+    } finally {
+      setIsLoading(false);
     }
   };
-
-  const styles = {
-    container: {
-      minHeight: '100vh',
-      backgroundColor: '#ffffff',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      padding: '20px'
-    },
-    authCard: {
-      backgroundColor: '#ffffff',
-      padding: '40px',
-      borderRadius: '12px',
-      boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)',
-      width: '100%',
-      maxWidth: '400px',
-      border: '1px solid #e5e7eb'
-    },
-    title: {
-      fontSize: '28px',
-      fontWeight: '700',
-      textAlign: 'center',
-      marginBottom: '30px',
-      color: '#1f2937',
-      letterSpacing: '-0.5px'
-    },
-    form: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '20px'
-    },
-    input: {
-      padding: '12px 16px',
-      fontSize: '16px',
-      border: '2px solid #e5e7eb',
-      borderRadius: '8px',
-      outline: 'none',
-      transition: 'all 0.2s ease',
-      backgroundColor: '#ffffff'
-    },
-    inputFocus: {
-      borderColor: '#3b82f6',
-      boxShadow: '0 0 0 3px rgba(59, 130, 246, 0.1)'
-    },
-    select: {
-      padding: '12px 16px',
-      fontSize: '16px',
-      border: '2px solid #e5e7eb',
-      borderRadius: '8px',
-      outline: 'none',
-      transition: 'all 0.2s ease',
-      backgroundColor: '#ffffff',
-      cursor: 'pointer'
-    },
-    button: {
-      padding: '14px',
-      fontSize: '16px',
-      fontWeight: '600',
-      backgroundColor: '#3b82f6',
-      color: '#ffffff',
-      border: 'none',
-      borderRadius: '8px',
-      cursor: 'pointer',
-      transition: 'all 0.2s ease',
-      marginTop: '10px'
-    },
-    buttonHover: {
-      backgroundColor: '#2563eb',
-      transform: 'translateY(-1px)',
-      boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
-    },
-    error: {
-      color: '#ef4444',
-      fontSize: '14px',
-      textAlign: 'center',
-      marginTop: '10px',
-      padding: '8px',
-      backgroundColor: '#fef2f2',
-      border: '1px solid #fecaca',
-      borderRadius: '6px'
-    },
-    switchText: {
-      textAlign: 'center',
-      marginTop: '25px',
-      fontSize: '14px',
-      color: '#6b7280'
-    },
-    switchLink: {
-      color: '#3b82f6',
-      cursor: 'pointer',
-      fontWeight: '600',
-      textDecoration: 'none',
-      transition: 'color 0.2s ease'
-    },
-    switchLinkHover: {
-      color: '#2563eb',
-      textDecoration: 'underline'
-    }
-  };
-
-  const [focusedInput, setFocusedInput] = useState('');
-  const [hoveredButton, setHoveredButton] = useState(false);
-  const [hoveredLink, setHoveredLink] = useState(false);
 
   return (
-    <div style={styles.container}>
-      <div style={styles.authCard}>
-        <h2 style={styles.title}>{isSignup ? 'Create Account' : 'Welcome Back'}</h2>
-        <div onSubmit={handleSubmit} style={styles.form}>
-          <input
-            type="text"
-            name="username"
-            placeholder="Username"
-            value={form.username}
-            onChange={handleChange}
-            onFocus={() => setFocusedInput('username')}
-            onBlur={() => setFocusedInput('')}
-            style={{
-              ...styles.input,
-              ...(focusedInput === 'username' ? styles.inputFocus : {})
-            }}
-            required
-          />
-          <input
-            type="password"
-            name="password"
-            placeholder="Password"
-            value={form.password}
-            onChange={handleChange}
-            onFocus={() => setFocusedInput('password')}
-            onBlur={() => setFocusedInput('')}
-            style={{
-              ...styles.input,
-              ...(focusedInput === 'password' ? styles.inputFocus : {})
-            }}
-            required
-          />
-          {isSignup && (
-            // Keep role fixed to 'user' for all signups (admin portal removed)
-            <input type="hidden" name="role" value={form.role} />
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full space-y-8 bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
+        <div>
+          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+            {isSignup ? 'Create Account' : 'Welcome Back'}
+          </h2>
+          <p className="mt-2 text-center text-sm text-gray-600">
+            {isSignup ? 'Sign up for your account' : 'Sign in to your account'}
+          </p>
+        </div>
+        
+        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="username" className="sr-only">
+                Username
+              </label>
+              <input
+                id="username"
+                name="username"
+                type="text"
+                required
+                className="relative block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:z-10 transition-all duration-200"
+                placeholder="Username"
+                value={form.username}
+                onChange={handleChange}
+              />
+            </div>
+            <div>
+              <label htmlFor="password" className="sr-only">
+                Password
+              </label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                required
+                className="relative block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:z-10 transition-all duration-200"
+                placeholder="Password"
+                value={form.password}
+                onChange={handleChange}
+              />
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-lg bg-red-50 p-4 border border-red-200">
+              <p className="text-sm text-red-600 text-center">{error}</p>
+            </div>
           )}
-          <button 
-            type="submit"
-            onClick={handleSubmit}
-            onMouseEnter={() => setHoveredButton(true)}
-            onMouseLeave={() => setHoveredButton(false)}
-            style={{
-              ...styles.button,
-              ...(hoveredButton ? styles.buttonHover : {})
-            }}
-          >
-            {isSignup ? 'Create Account' : 'Sign In'}
-          </button>
-        </div>
-        {error && <div style={styles.error}>{error}</div>}
-        <div style={styles.switchText}>
-          {isSignup ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <span 
-            onClick={() => setIsSignup(!isSignup)}
-            onMouseEnter={() => setHoveredLink(true)}
-            onMouseLeave={() => setHoveredLink(false)}
-            style={{
-              ...styles.switchLink,
-              ...(hoveredLink ? styles.switchLinkHover : {})
-            }}
-          >
-            {isSignup ? 'Sign in here' : 'Create one here'}
-          </span>
-        </div>
+
+          <div>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-500/25"
+            >
+              {isLoading ? (
+                <div className="flex items-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  {isSignup ? 'Creating Account...' : 'Signing In...'}
+                </div>
+              ) : (
+                isSignup ? 'Create Account' : 'Sign In'
+              )}
+            </button>
+          </div>
+
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => setIsSignup(!isSignup)}
+              className="text-blue-600 hover:text-blue-500 font-medium text-sm transition-colors duration-200"
+            >
+              {isSignup ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

@@ -1,4 +1,3 @@
-// App.jsx
 import React, { useState, useEffect } from 'react';
 import './App.css';
 import Auth from './components/Auth';
@@ -23,7 +22,7 @@ function App() {
   };
 
   return (
-    <div className="app">
+    <div className="min-h-screen bg-gray-50">
       {!token ? (
         <Auth onLogin={handleLogin} />
       ) : (

@@ -1,17 +1,61 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const Dashboard = ({ role, onLogout, token }) => {
   const [file, setFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState('');
-  const [docId, setDocId] = useState(null);
-  const [history, setHistory] = useState([]);
+  const [selectedDocId, setSelectedDocId] = useState(null);
+  const [documents, setDocuments] = useState([]);
   const [query, setQuery] = useState('');
   const [response, setResponse] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [hoveredButton, setHoveredButton] = useState('');
+  const [documentHistory, setDocumentHistory] = useState({});
 
-  const backendUrl = 'http://localhost:5001/api';
+  const backendUrl = process.env.REACT_APP_BACKEND_URL;
+
+
+  useEffect(() => {
+    fetchDocuments();
+  }, []);
+
+  const fetchDocuments = async () => {
+    try {
+      const res = await fetch(`${backendUrl}/documents`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setDocuments(data.documents || []);
+        if (data.documents && data.documents.length > 0 && !selectedDocId) {
+          setSelectedDocId(data.documents[0].doc_id);
+          fetchDocumentHistory(data.documents[0].doc_id);
+        }
+      } else {
+        console.error('Failed to fetch documents:', data.error);
+      }
+    } catch (err) {
+      console.error('Error fetching documents:', err);
+    }
+  };
+
+  const fetchDocumentHistory = async (docId) => {
+    try {
+      const res = await fetch(`${backendUrl}/documents/${docId}/history`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setDocumentHistory(prev => ({
+          ...prev,
+          [docId]: data.history || []
+        }));
+      } else {
+        console.error('Failed to fetch history:', data.error);
+      }
+    } catch (err) {
+      console.error('Error fetching history:', err);
+    }
+  };
 
   const handleFileChange = (e) => setFile(e.target.files[0]);
 
@@ -52,9 +96,14 @@ const Dashboard = ({ role, onLogout, token }) => {
       const data = await res.json();
       if (res.ok) {
         setUploadStatus('File uploaded and processed successfully');
+        setFile(null);
+        await fetchDocuments();
         if (data.doc_id) {
-          setDocId(data.doc_id);
-          setHistory([]); // clear local history for this new doc
+          setSelectedDocId(data.doc_id);
+          setDocumentHistory(prev => ({
+            ...prev,
+            [data.doc_id]: []
+          }));
         }
       } else {
         setUploadStatus(data.error);
@@ -70,6 +119,11 @@ const Dashboard = ({ role, onLogout, token }) => {
       return;
     }
 
+    if (!selectedDocId) {
+      setResponse('Please select a document first');
+      return;
+    }
+
     setIsLoading(true);
     try {
       const res = await fetch(`${backendUrl}/query`, {
@@ -78,14 +132,13 @@ const Dashboard = ({ role, onLogout, token }) => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ query, doc_id: docId }),
+        body: JSON.stringify({ query, doc_id: selectedDocId }),
       });
 
       const data = await res.json();
       if (res.ok) {
         setResponse(data.answer);
-        // update local history
-        setHistory((h) => [{ query, answer: data.answer, ts: new Date().toISOString() }, ...h]);
+        await fetchDocumentHistory(selectedDocId);
       } else {
         setResponse(data.error);
       }
@@ -96,404 +149,246 @@ const Dashboard = ({ role, onLogout, token }) => {
     }
   };
 
-  const styles = {
-    dashboard: {
-      minHeight: '100vh',
-      backgroundColor: '#ffffff',
-      padding: '20px',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
-    },
-    container: {
-      maxWidth: '1200px',
-      margin: '0 auto',
-      backgroundColor: '#ffffff',
-      borderRadius: '20px',
-      padding: '40px',
-      boxShadow: '0 20px 40px rgba(0, 0, 0, 0.1)',
-      border: '1px solid rgba(0, 0, 0, 0.1)'
-    },
-    header: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: '40px',
-      paddingBottom: '20px',
-      borderBottom: '2px solid #e5e7eb'
-    },
-    title: {
-      fontSize: '32px',
-      fontWeight: '700',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      WebkitBackgroundClip: 'text',
-      WebkitTextFillColor: 'transparent',
-      backgroundClip: 'text',
-      margin: 0
-    },
-    logoutButton: {
-      padding: '12px 24px',
-      backgroundColor: '#ef4444',
-      color: 'white',
-      border: 'none',
-      borderRadius: '12px',
-      fontSize: '16px',
-      fontWeight: '600',
-      cursor: 'pointer',
-      transition: 'all 0.3s ease',
-      boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)'
-    },
-    logoutButtonHover: {
-      backgroundColor: '#dc2626',
-      transform: 'translateY(-2px)',
-      boxShadow: '0 6px 20px rgba(239, 68, 68, 0.4)'
-    },
-    section: {
-      background: 'linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)',
-      borderRadius: '16px',
-      padding: '30px',
-      marginBottom: '30px',
-      border: '1px solid rgba(255, 255, 255, 0.5)',
-      boxShadow: '0 8px 25px rgba(0, 0, 0, 0.08)'
-    },
-    sectionTitle: {
-      fontSize: '24px',
-      fontWeight: '600',
-      color: '#1f2937',
-      marginBottom: '20px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px'
-    },
-    uploadArea: {
-      border: '2px dashed #cbd5e1',
-      borderRadius: '12px',
-      padding: '40px',
-      textAlign: 'center',
-      transition: 'all 0.3s ease',
-      cursor: 'pointer',
-      background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
-      marginBottom: '20px'
-    },
-    uploadAreaDragging: {
-      borderColor: '#3b82f6',
-      backgroundColor: '#eff6ff',
-      transform: 'scale(1.02)'
-    },
-    uploadAreaHover: {
-      borderColor: '#64748b',
-      backgroundColor: '#f1f5f9'
-    },
-    fileInput: {
-      display: 'none'
-    },
-    fileLabel: {
-      display: 'inline-block',
-      padding: '12px 24px',
-      backgroundColor: '#3b82f6',
-      color: 'white',
-      borderRadius: '10px',
-      cursor: 'pointer',
-      fontSize: '16px',
-      fontWeight: '600',
-      transition: 'all 0.3s ease',
-      boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)'
-    },
-    fileLabelHover: {
-      backgroundColor: '#2563eb',
-      transform: 'translateY(-2px)',
-      boxShadow: '0 6px 20px rgba(59, 130, 246, 0.4)'
-    },
-    uploadButton: {
-      padding: '14px 28px',
-      backgroundColor: '#10b981',
-      color: 'white',
-      border: 'none',
-      borderRadius: '12px',
-      fontSize: '16px',
-      fontWeight: '600',
-      cursor: 'pointer',
-      transition: 'all 0.3s ease',
-      boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)',
-      marginTop: '15px'
-    },
-    uploadButtonHover: {
-      backgroundColor: '#059669',
-      transform: 'translateY(-2px)',
-      boxShadow: '0 6px 20px rgba(16, 185, 129, 0.4)'
-    },
-    textarea: {
-      width: '100%',
-      padding: '16px',
-      border: '2px solid #e5e7eb',
-      borderRadius: '12px',
-      fontSize: '16px',
-      fontFamily: 'inherit',
-      resize: 'vertical',
-      transition: 'all 0.3s ease',
-      background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)',
-      outline: 'none',
-      marginBottom: '20px'
-    },
-    textareaFocus: {
-      borderColor: '#3b82f6',
-      boxShadow: '0 0 0 3px rgba(59, 130, 246, 0.1)',
-      transform: 'scale(1.01)'
-    },
-    submitButton: {
-      padding: '14px 28px',
-      backgroundColor: '#8b5cf6',
-      color: 'white',
-      border: 'none',
-      borderRadius: '12px',
-      fontSize: '16px',
-      fontWeight: '600',
-      cursor: 'pointer',
-      transition: 'all 0.3s ease',
-      boxShadow: '0 4px 15px rgba(139, 92, 246, 0.3)',
-      position: 'relative',
-      overflow: 'hidden'
-    },
-    submitButtonHover: {
-      backgroundColor: '#7c3aed',
-      transform: 'translateY(-2px)',
-      boxShadow: '0 6px 20px rgba(139, 92, 246, 0.4)'
-    },
-    submitButtonDisabled: {
-      backgroundColor: '#9ca3af',
-      cursor: 'not-allowed',
-      transform: 'none',
-      boxShadow: '0 2px 8px rgba(156, 163, 175, 0.2)'
-    },
-    loadingSpinner: {
-      display: 'inline-block',
-      width: '20px',
-      height: '20px',
-      border: '2px solid #ffffff',
-      borderRadius: '50%',
-      borderTopColor: 'transparent',
-      animation: 'spin 1s linear infinite',
-      marginRight: '8px'
-    },
-    response: {
-      marginTop: '25px',
-      padding: '20px',
-      background: 'linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%)',
-      borderRadius: '12px',
-      border: '1px solid #e0e7ff',
-      boxShadow: '0 4px 15px rgba(0, 0, 0, 0.05)',
-      maxHeight: '400px',
-      overflowY: 'auto'
-    },
-    responseParagraph: {
-      margin: '0 0 10px 0',
-      lineHeight: '1.6',
-      color: '#374151'
-    },
-    status: {
-      padding: '12px 16px',
-      borderRadius: '8px',
-      fontSize: '14px',
-      fontWeight: '500',
-      marginTop: '15px',
-      textAlign: 'center'
-    },
-    statusSuccess: {
-      backgroundColor: '#d1fae5',
-      color: '#065f46',
-      border: '1px solid #a7f3d0'
-    },
-    statusError: {
-      backgroundColor: '#fee2e2',
-      color: '#991b1b',
-      border: '1px solid #fca5a5'
-    },
-    fileName: {
-      marginTop: '10px',
-      padding: '8px 12px',
-      backgroundColor: '#eff6ff',
-      color: '#1e40af',
-      borderRadius: '6px',
-      fontSize: '14px',
-      fontWeight: '500',
-      display: 'inline-block'
+  const handleDocumentSelect = (docId) => {
+    setSelectedDocId(docId);
+    setResponse('');
+    setQuery('');
+    if (!documentHistory[docId]) {
+      fetchDocumentHistory(docId);
     }
   };
 
-  const [focusedTextarea, setFocusedTextarea] = useState(false);
-  const [hoveredUploadArea, setHoveredUploadArea] = useState(false);
-
   return (
-    <div style={styles.dashboard}>
-      <div style={styles.container}>
-        <div style={styles.header}>
-          <h2 style={styles.title}>
-            {'� PDF Q&A'}
-          </h2>
-          <button
-            onClick={onLogout}
-            onMouseEnter={() => setHoveredButton('logout')}
-            onMouseLeave={() => setHoveredButton('')}
-            style={{
-              ...styles.logoutButton,
-              ...(hoveredButton === 'logout' ? styles.logoutButtonHover : {})
-            }}
-          >
-            Logout
-          </button>
-        </div>
-
-        <div style={styles.section}>
-          <h3 style={styles.sectionTitle}>📄 Upload PDF Document</h3>
-          <div
-            style={{
-              ...styles.uploadArea,
-              ...(isDragging ? styles.uploadAreaDragging : {}),
-              ...(hoveredUploadArea && !isDragging ? styles.uploadAreaHover : {})
-            }}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onMouseEnter={() => setHoveredUploadArea(true)}
-            onMouseLeave={() => setHoveredUploadArea(false)}
-          >
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>📁</div>
-            <p style={{ fontSize: '18px', fontWeight: '600', marginBottom: '8px', color: '#1f2937' }}>
-              Drop your PDF here or click to browse
-            </p>
-            <p style={{ fontSize: '14px', color: '#6b7280', marginBottom: '20px' }}>
-              Supports PDF files up to 10MB
-            </p>
-            <input
-              type="file"
-              accept=".pdf"
-              onChange={handleFileChange}
-              style={styles.fileInput}
-              id="file-input"
-            />
-            <label
-              htmlFor="file-input"
-              onMouseEnter={() => setHoveredButton('file')}
-              onMouseLeave={() => setHoveredButton('')}
-              style={{
-                ...styles.fileLabel,
-                ...(hoveredButton === 'file' ? styles.fileLabelHover : {})
-              }}
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="bg-white rounded-2xl shadow-lg p-6 mb-8 border border-gray-200">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                📚 PDF Q&A Assistant
+              </h1>
+              <p className="text-gray-600 mt-2">Upload PDFs and ask questions about your documents</p>
+            </div>
+            <button
+              onClick={onLogout}
+              className="px-6 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-all duration-200 shadow-lg shadow-red-500/25 font-medium"
             >
-              Choose File
-            </label>
+              Logout
+            </button>
           </div>
-          
-          {file && (
-            <div style={styles.fileName}>
-              📎 {file.name}
-            </div>
-          )}
-          
-          <button
-            onClick={handleUpload}
-            onMouseEnter={() => setHoveredButton('upload')}
-            onMouseLeave={() => setHoveredButton('')}
-            style={{
-              ...styles.uploadButton,
-              ...(hoveredButton === 'upload' ? styles.uploadButtonHover : {})
-            }}
-          >
-            Upload & Process
-          </button>
-          
-          {uploadStatus && (
-            <div style={{
-              ...styles.status,
-              ...(uploadStatus.includes('successfully') ? styles.statusSuccess : styles.statusError)
-            }}>
-              {uploadStatus}
-            </div>
-          )}
         </div>
 
-        <div style={styles.section}>
-          <h3 style={styles.sectionTitle}>❓ Ask a Question</h3>
-          <textarea
-            rows={4}
-            placeholder="Enter your query here... Ask anything about the uploaded documents!"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => setFocusedTextarea(true)}
-            onBlur={() => setFocusedTextarea(false)}
-            style={{
-              ...styles.textarea,
-              ...(focusedTextarea ? styles.textareaFocus : {})
-            }}
-          />
-          <button
-            onClick={handleQuery}
-            disabled={isLoading}
-            onMouseEnter={() => setHoveredButton('submit')}
-            onMouseLeave={() => setHoveredButton('')}
-            style={{
-              ...styles.submitButton,
-              ...(isLoading ? styles.submitButtonDisabled : {}),
-              ...(hoveredButton === 'submit' && !isLoading ? styles.submitButtonHover : {})
-            }}
-          >
-            {isLoading && <span style={styles.loadingSpinner}></span>}
-            {isLoading ? 'Processing...' : 'Submit Query'}
-          </button>
-          
-            {response && (
-              <div style={styles.response}>
-                <h4 style={{ margin: '0 0 15px 0', color: '#1f2937', fontSize: '18px', fontWeight: '600' }}>
-                  💡 Response:
-                </h4>
-                {response.split('\n').map((line, i) => (
-                  <p key={i} style={styles.responseParagraph}>{line}</p>
-                ))}
-              </div>
-            )}
-
-            {/* Local history for this PDF */}
-            {history && history.length > 0 && (
-              <div style={{ ...styles.section, marginTop: '20px' }}>
-                <h4 style={{ margin: '0 0 12px 0', color: '#1f2937', fontSize: '16px', fontWeight: '600' }}>
-                  🕘 Recent Q&A (this document)
-                </h4>
-                {history.map((item, i) => (
-                  <div key={i} style={{ marginBottom: '12px' }}>
-                    <div style={{ fontSize: '14px', color: '#6b7280' }}>{new Date(item.ts).toLocaleString()}</div>
-                    <div style={{ fontWeight: '600', color: '#111827' }}>Q: {item.query}</div>
-                    <div style={{ color: '#374151', marginTop: '6px' }}>{item.answer}</div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Sidebar - Documents */}
+          <div className="lg:col-span-1 space-y-8">
+            {/* Document List */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-200">
+              <h3 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
+                <span className="w-6 h-6 mr-2">📁</span>
+                Your Documents
+              </h3>
+              
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {documents.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <div className="text-4xl mb-2">📄</div>
+                    <p>No documents yet</p>
+                    <p className="text-sm">Upload your first PDF to get started</p>
                   </div>
-                ))}
+                ) : (
+                  documents.map((doc) => (
+                    <div
+                      key={doc.doc_id}
+                      onClick={() => handleDocumentSelect(doc.doc_id)}
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 ${
+                        selectedDocId === doc.doc_id
+                          ? 'border-blue-500 bg-blue-50 shadow-md'
+                          : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <h4 className="font-semibold text-gray-900 truncate">{doc.filename}</h4>
+                          <div className="text-sm text-gray-500 mt-1">
+                            Uploaded: {new Date(doc.uploaded_at).toLocaleDateString()}
+                          </div>
+                          <div className="text-xs text-blue-600 font-medium mt-1">
+                            Chunks: {doc.chunks}
+                          </div>
+                        </div>
+                        {selectedDocId === doc.doc_id && (
+                          <span className="bg-blue-500 text-white px-2 py-1 rounded-full text-xs font-medium">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-            )}
+            </div>
+
+            {/* Upload Section */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-200">
+              <h3 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
+                <span className="w-6 h-6 mr-2">📤</span>
+                Upload PDF
+              </h3>
+
+              <div
+                className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200 cursor-pointer ${
+                  isDragging
+                    ? 'border-blue-500 bg-blue-50 scale-105'
+                    : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
+                }`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <div className="text-4xl mb-4">📁</div>
+                <p className="font-semibold text-gray-900 mb-2">
+                  Drop your PDF here or click to browse
+                </p>
+                <p className="text-sm text-gray-500 mb-4">
+                  Supports PDF files up to 10MB
+                </p>
+                <input
+                  type="file"
+                  accept=".pdf"
+                  onChange={handleFileChange}
+                  className="hidden"
+                  id="file-input"
+                />
+                <label
+                  htmlFor="file-input"
+                  className="inline-block px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-200 cursor-pointer shadow-lg shadow-blue-500/25 font-medium"
+                >
+                  Choose File
+                </label>
+              </div>
+
+              {file && (
+                <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center">
+                  <span className="text-green-600 mr-2">📎</span>
+                  <span className="text-green-800 font-medium truncate">{file.name}</span>
+                </div>
+              )}
+
+              <button
+                onClick={handleUpload}
+                disabled={!file}
+                className="w-full mt-4 px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-green-500/25 font-medium"
+              >
+                Upload & Process
+              </button>
+
+              {uploadStatus && (
+                <div className={`mt-4 p-3 rounded-lg text-center font-medium ${
+                  uploadStatus.includes('successfully')
+                    ? 'bg-green-50 text-green-800 border border-green-200'
+                    : 'bg-red-50 text-red-800 border border-red-200'
+                }`}>
+                  {uploadStatus}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Main Content - Q&A */}
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-200">
+              <h3 className="text-xl font-semibold text-gray-900 mb-4 flex items-center">
+                <span className="w-6 h-6 mr-2">❓</span>
+                Ask Questions
+                {selectedDocId && (
+                  <span className="text-sm font-normal text-gray-500 ml-2">
+                    (Currently selected: {documents.find(d => d.doc_id === selectedDocId)?.filename})
+                  </span>
+                )}
+              </h3>
+
+              {!selectedDocId && (
+                <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  {documents.length > 0 
+                    ? 'Please select a document from the list to start asking questions.'
+                    : 'Please upload a PDF document first to ask questions.'
+                  }
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <textarea
+                  rows={4}
+                  placeholder={
+                    selectedDocId 
+                      ? "Enter your query here... Ask anything about the selected document!"
+                      : "Please select a document first to ask questions."
+                  }
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  disabled={!selectedDocId}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 resize-none disabled:bg-gray-100 disabled:cursor-not-allowed"
+                />
+
+                <button
+                  onClick={handleQuery}
+                  disabled={isLoading || !selectedDocId}
+                  className="w-full px-6 py-4 bg-purple-500 text-white rounded-lg hover:bg-purple-600 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-purple-500/25 font-medium flex items-center justify-center"
+                >
+                  {isLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                      Processing...
+                    </>
+                  ) : (
+                    'Submit Query'
+                  )}
+                </button>
+              </div>
+
+              {response && (
+                <div className="mt-6 p-6 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+                    <span className="w-5 h-5 mr-2">💡</span>
+                    Response
+                  </h4>
+                  <div className="prose prose-blue max-w-none">
+                    {response.split('\n').map((line, i) => (
+                      <p key={i} className="text-gray-700 leading-relaxed mb-2">{line}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Conversation History */}
+              {selectedDocId && documentHistory[selectedDocId] && documentHistory[selectedDocId].length > 0 && (
+                <div className="mt-8">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <span className="w-5 h-5 mr-2">📝</span>
+                    Conversation History
+                  </h4>
+                  <div className="space-y-4 max-h-96 overflow-y-auto">
+                    {documentHistory[selectedDocId]
+                      .slice()
+                      .reverse()
+                      .map((item, i) => (
+                        <div key={i} className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                          <div className="font-semibold text-gray-900 mb-2">Q: {item.query}</div>
+                          <div className="text-gray-700 mb-2">{item.answer}</div>
+                          <div className="text-xs text-gray-500">
+                            {new Date(item.timestamp).toLocaleString()}
+                          </div>
+                        </div>
+                      ))
+                    }
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
-      
-      <style>
-        {`
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-          
-          .dashboard *::-webkit-scrollbar {
-            width: 8px;
-          }
-          
-          .dashboard *::-webkit-scrollbar-track {
-            background: #f1f5f9;
-            border-radius: 4px;
-          }
-          
-          .dashboard *::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 4px;
-          }
-          
-          .dashboard *::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
-          }
-        `}
-      </style>
     </div>
   );
 };

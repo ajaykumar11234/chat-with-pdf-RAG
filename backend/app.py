@@ -1,6 +1,7 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from pymongo import MongoClient
+from gridfs import GridFS
 from bson.objectid import ObjectId
 import bcrypt
 import jwt
@@ -11,43 +12,54 @@ from functools import wraps
 import tempfile
 from groq import Groq
 
-# 🔹 LangChain imports (only for document processing)
+# LangChain imports
 from langchain.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
-# 🔹 Load environment variables
+# -------------------- Load env --------------------
 load_dotenv()
 
 app = Flask(__name__)
 
-# 🔹 Allow cross-origin (React frontend)
-# Allow cross-origin (React frontend). Explicitly allow Authorization header so preflight succeeds.
+# Configure CORS - update origins for production
 CORS(app,
-    supports_credentials=True,
-    resources={r"/api/*": {"origins": "http://localhost:3000"}},
-    allow_headers=["Content-Type", "Authorization"]
+     supports_credentials=True,
+     resources={r"/api/*": {"origins": "http://localhost:3000"}},
+     allow_headers=["Content-Type", "Authorization"]
 )
 
-# 🔹 Secrets and config
 SECRET_KEY = os.getenv("SECRET_KEY", "mysecretkey")
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# ===================== MONGODB CONNECTION =====================
+if not GROQ_API_KEY:
+    # warning - Groq is required in your original code. If you don't want to use it,
+    # replace query_groq_with_context with another LLM call.
+    raise AssertionError("Groq API key missing")
+
+# -------------------- MongoDB --------------------
 try:
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
     client.server_info()
     print("✅ Connected to MongoDB")
 except Exception as e:
     print(f"❌ MongoDB connection error: {e}")
-    exit()
+    exit(1)
 
 db = client['auth_app']
+fs = GridFS(db)
 users_collection = db['users']
 documents_collection = db['documents']
 
-# ===================== JWT TOKEN FUNCTIONS =====================
+# -------------------- Groq client --------------------
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+# Global state - NOTE: in production this should be per-document and not global
+# we'll load vectorstore per-document using helper functions
+
+# -------------------- JWT helpers --------------------
 def generate_token(user_id, role):
     payload = {
         'id': str(user_id),
@@ -60,7 +72,6 @@ def generate_token(user_id, role):
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        # Allow preflight OPTIONS requests to pass without authentication
         if request.method == 'OPTIONS':
             return ('', 200)
         token = request.headers.get('Authorization', '').replace('Bearer ', '')
@@ -78,8 +89,7 @@ def token_required(f):
         return f(current_user, *args, **kwargs)
     return decorated
 
-
-# ===================== AUTH ROUTES =====================
+# -------------------- Auth routes --------------------
 @app.route('/api/signup', methods=['POST'])
 def signup():
     data = request.get_json()
@@ -122,79 +132,87 @@ def login():
 def profile(current_user):
     return jsonify({'username': current_user['username'], 'role': current_user['role']}), 200
 
-
-# ===================== RAG PDF / QUERY ROUTES =====================
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-assert GROQ_API_KEY, "Groq API key missing"
-
-# Initialize Groq client
-groq_client = Groq(api_key=GROQ_API_KEY)
-
-# Global variables for vector store
-vector_store = None
-embeddings_model = None
-
-
-def process_pdf(pdf_path):
-    """Process PDF and create vector store"""
-    global vector_store, embeddings_model
-    
-    # Load PDF
-    loader = PyPDFLoader(pdf_path)
-    pages = loader.load_and_split()
-
-    # Split text into chunks
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=5000, 
-        chunk_overlap=500
-    )
-    texts = text_splitter.split_text("\n\n".join(p.page_content for p in pages))
-
-    # Create embeddings model (runs locally, no API needed)
-    embeddings_model = HuggingFaceEmbeddings(
+# -------------------- Helpers for embeddings & vector store --------------------
+def get_embeddings():
+    """Return an instance of the HuggingFaceEmbeddings used by the app."""
+    return HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={'device': 'cpu'},
         encode_kwargs={'normalize_embeddings': True}
     )
 
-    # Create vector store
-    vector_store = Chroma.from_texts(texts, embeddings_model)
-    
+
+def process_pdf_to_vectorstore(pdf_path, persist_dir):
+    """Load PDF from path, split, create embeddings and a persisted Chroma vectorstore.
+    Returns number of chunks created.
+    """
+    loader = PyPDFLoader(pdf_path)
+    pages = loader.load_and_split()
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=5000,
+        chunk_overlap=500
+    )
+    texts = text_splitter.split_text("\n\n".join(p.page_content for p in pages))
+
+    embeddings_model = get_embeddings()
+
+    # Create Chroma vectorstore and persist it
+    vector_store = Chroma.from_texts(texts, embeddings_model, persist_directory=persist_dir)
+    vector_store.persist()
+
     return len(texts)
 
 
+def load_vector_store_for_document(doc_record):
+    """Given a document record (from Mongo), ensure vectorstore exists and return a Chroma instance.
+    If vectorstore directory is missing, re-generate from the stored PDF.
+    """
+    persist_dir = doc_record.get('vector_folder')
+    if not persist_dir:
+        raise FileNotFoundError('Vector folder not recorded for document')
+
+    embeddings_model = get_embeddings()
+
+    # If persist_dir doesn't exist on disk, attempt to recreate from GridFS stored PDF
+    if not os.path.exists(persist_dir):
+        # recreate directory
+        os.makedirs(persist_dir, exist_ok=True)
+        # retrieve PDF from GridFS and reprocess
+        file_id = doc_record.get('file_id')
+        if not file_id:
+            raise FileNotFoundError('No file_id in document record to recreate vector store')
+        tmp = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+        try:
+            grid_out = fs.get(file_id)
+            tmp.write(grid_out.read())
+            tmp.flush()
+            tmp.close()
+            process_pdf_to_vectorstore(tmp.name, persist_dir)
+        finally:
+            if os.path.exists(tmp.name):
+                os.unlink(tmp.name)
+
+    # load persisted Chroma
+    vector_store = Chroma(persist_directory=persist_dir, embedding_function=embeddings_model)
+    return vector_store
+
+# -------------------- Groq query helper --------------------
 def query_groq_with_context(query_text, context_docs):
-    """Query Groq API with retrieved context"""
-    
-    # Combine context documents
-    context = "\n\n".join([doc.page_content for doc in context_docs])
-    
-    # Create prompt
-    prompt = f"""Context: {context}
+    context = "\n\n".join(getattr(doc, 'page_content', str(doc)) for doc in context_docs)
 
-Question: {query_text}
+    prompt = f"""Context: {context}\n\nQuestion: {query_text}\n\nAnswer the question using the context above. Format your answer clearly and concisely. Always end with: \"Thanks for asking!\"\n\nAnswer:"""
 
-Answer the question using the context above. Format your answer clearly and concisely.
-Always end with: "Thanks for asking!"
-
-Answer:"""
-
-    # Call Groq API directly
     chat_completion = groq_client.chat.completions.create(
-        messages=[
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-        model="llama-3.3-70b-versatile",  # or "mixtral-8x7b-32768", "llama-3.1-70b-versatile"
+        messages=[{"role": "user", "content": prompt}],
+        model="llama-3.3-70b-versatile",
         temperature=0.3,
         max_tokens=1024,
     )
-    
+
     return chat_completion.choices[0].message.content
 
-
+# -------------------- Upload endpoint (stores PDF in GridFS + persists vectorstore) --------------------
 @app.route('/api/upload-pdf', methods=['POST', 'OPTIONS'])
 @token_required
 def upload_pdf(current_user):
@@ -209,32 +227,40 @@ def upload_pdf(current_user):
         return jsonify({"error": "Invalid file type"}), 400
 
     try:
+        # Save raw PDF into GridFS
+        file_id = fs.put(file, filename=file.filename)
+
+        # create temp file for processing
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            file.save(tmp.name)
+            file.stream.seek(0)
+            tmp.write(file.stream.read())
+            tmp.flush()
             tmp_path = tmp.name
 
-        chunks_count = process_pdf(tmp_path)
+        # prepare directory to persist vectorstore
+        vector_folder = os.path.join('vectorstores', str(file_id))
+        os.makedirs(vector_folder, exist_ok=True)
 
-        # Save document metadata and empty history
-        try:
-            doc = {
-                'user_id': current_user['_id'],
-                'username': current_user['username'],
-                'filename': file.filename,
-                'uploaded_at': datetime.datetime.utcnow(),
-                'chunks_processed': chunks_count,
-                'history': []
-            }
-            inserted = documents_collection.insert_one(doc)
-            doc_id = str(inserted.inserted_id)
-        except Exception as e:
-            # If DB write fails, still return success for processing but warn
-            doc_id = None
+        chunks_count = process_pdf_to_vectorstore(tmp_path, vector_folder)
+
+        # record in documents collection
+        doc = {
+            'user_id': current_user['_id'],
+            'username': current_user['username'],
+            'filename': file.filename,
+            'file_id': file_id,
+            'vector_folder': vector_folder,
+            'uploaded_at': datetime.datetime.utcnow(),
+            'chunks_processed': chunks_count,
+            'history': []
+        }
+        inserted = documents_collection.insert_one(doc)
+        doc_id = str(inserted.inserted_id)
 
         return jsonify({
-            "message": "PDF processed successfully", 
-            "chunks_processed": chunks_count,
-            "doc_id": doc_id
+            "message": "PDF uploaded & processed",
+            "doc_id": doc_id,
+            "chunks_processed": chunks_count
         }), 200
 
     except Exception as e:
@@ -244,7 +270,41 @@ def upload_pdf(current_user):
         if 'tmp_path' in locals() and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
+# -------------------- List documents for user --------------------
+@app.route('/api/documents', methods=['GET'])
+@token_required
+def list_documents(current_user):
+    docs = documents_collection.find({'user_id': current_user['_id']})
+    out = []
+    for d in docs:
+        out.append({
+            'doc_id': str(d['_id']),
+            'filename': d.get('filename'),
+            'uploaded_at': d.get('uploaded_at').isoformat() if isinstance(d.get('uploaded_at'), datetime.datetime) else d.get('uploaded_at'),
+            'chunks': d.get('chunks_processed', 0)
+        })
+    return jsonify({'documents': out}), 200
 
+# # -------------------- Download PDF from GridFS --------------------
+# @app.route('/api/download-pdf/<doc_id>', methods=['GET'])
+# @token_required
+# def download_pdf(current_user, doc_id):
+#     try:
+#         doc = documents_collection.find_one({"_id": ObjectId(doc_id)})
+#         if not doc:
+#             return jsonify({"error": "Document not found"}), 404
+
+#         file_id = doc.get('file_id')
+#         if not file_id:
+#             return jsonify({"error": "File not found for this document"}), 404
+
+#         grid_out = fs.get(file_id)
+#         return Response(grid_out.read(), mimetype='application/pdf', headers={"Content-Disposition": f"attachment;filename={doc.get('filename', 'file.pdf')}")
+
+#     except Exception as e:
+#         return jsonify({"error": f"Failed to download PDF: {str(e)}"}), 500
+
+# -------------------- Query endpoint (load vectorstore per doc + call Groq) --------------------
 @app.route('/api/query', methods=['POST'])
 @token_required
 def query(current_user):
@@ -256,41 +316,68 @@ def query(current_user):
     if not doc_id:
         return jsonify({"error": "doc_id is required"}), 400
 
-    if not vector_store:
-        return jsonify({"error": "Upload PDF first"}), 400
-
     try:
-        # Retrieve relevant documents
+        doc = documents_collection.find_one({"_id": ObjectId(doc_id)})
+        if not doc:
+            return jsonify({"error": "Document not found"}), 404
+
+        # Only owner may query their document
+        if doc.get('user_id') != current_user['_id']:
+            return jsonify({"error": "Forbidden"}), 403
+
+        # load or recreate vector store
+        vector_store = load_vector_store_for_document(doc)
+
         query_text = data['query']
         relevant_docs = vector_store.similarity_search(query_text, k=3)
-        
-        # Query Groq with context
+
         answer = query_groq_with_context(query_text, relevant_docs)
 
-        # Append to document history (best-effort)
-        try:
-            documents_collection.update_one(
-                {"_id": ObjectId(doc_id)},
-                {"$push": {"history": {
-                    "query": query_text,
-                    "answer": answer,
-                    "timestamp": datetime.datetime.utcnow(),
-                    "user": current_user['username']
-                }}}
-            )
-        except Exception:
-            # ignore errors writing history
-            pass
-
-        return jsonify({
+        # push history
+        documents_collection.update_one({"_id": ObjectId(doc_id)}, {"$push": {"history": {
+            "query": query_text,
             "answer": answer,
-            "sources": [{"page": doc.metadata.get("page", "unknown")} for doc in relevant_docs]
-        }), 200
+            "timestamp": datetime.datetime.utcnow(),
+            "user": current_user['username']
+        }}})
+
+        sources = []
+        for doc_hit in relevant_docs:
+            # try to get page metadata safely
+            try:
+                page = doc_hit.metadata.get('page', 'unknown')
+            except Exception:
+                page = 'unknown'
+            sources.append({'page': page})
+
+        return jsonify({"answer": answer, "sources": sources}), 200
 
     except Exception as e:
         return jsonify({"error": f"Query failed: {str(e)}"}), 500
 
+@app.route('/download/<doc_id>', methods=['GET'])
+def download_file(doc_id):
+    try:
+        doc = documents_collection.find_one({"_id": ObjectId(doc_id)})
+        if not doc:
+            return jsonify({"error": "Document not found"}), 404
 
+        grid_out = fs.get(doc['file_id'])
+
+        return Response(
+            grid_out.read(),
+            mimetype='application/pdf',
+            headers={
+                "Content-Disposition": f"attachment; filename={doc.get('filename', 'file.pdf')}"
+            }
+        )
+
+    except Exception as e:
+        print("Download error:", e)
+        return jsonify({"error": "Download failed"}), 500
+
+
+# -------------------- Document history --------------------
 @app.route('/api/documents/<doc_id>/history', methods=['GET'])
 @token_required
 def get_document_history(current_user, doc_id):
@@ -314,6 +401,6 @@ def get_document_history(current_user, doc_id):
     except Exception as e:
         return jsonify({"error": f"Failed to fetch history: {str(e)}"}), 500
 
-
+# -------------------- Run --------------------
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
